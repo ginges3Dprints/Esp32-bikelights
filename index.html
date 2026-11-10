@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bike Lights</title>
+<style>
+:root{
+  --bg:#f2f4f8;--card:#ffffff;--fg:#141922;--muted:#5d6676;--btn:#e4e8ef;--acc:#1e7fe0;--onacc:#ffffff;--ok:#1fa85a;--err:#c93434;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){--bg:#0e1116;--card:#1a1f29;--fg:#e8ecf2;--muted:#8b95a7;--btn:#2a3140;--acc:#3ea6ff;--onacc:#00111f;--ok:#2ecc71;--err:#ff7a7a;color-scheme:dark}
+}
+:root[data-theme="dark"]{--bg:#0e1116;--card:#1a1f29;--fg:#e8ecf2;--muted:#8b95a7;--btn:#2a3140;--acc:#3ea6ff;--onacc:#00111f;--ok:#2ecc71;--err:#ff7a7a;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0 auto;max-width:520px;padding:14px;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,sans-serif}
+h1{font-size:20px;margin:4px 0 12px;display:flex;justify-content:space-between;align-items:center}
+h2{font-size:12px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.card{background:var(--card);border-radius:14px;padding:12px;margin-bottom:12px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+button{background:var(--btn);color:var(--fg);border:0;border-radius:10px;padding:12px 6px;font-size:15px;font-family:inherit}
+button.on{background:var(--acc);color:var(--onacc);font-weight:700}
+#pwr{flex:none;width:76px;padding:8px}
+#pwr.on{background:var(--ok);color:#fff}
+#conn{width:100%;font-weight:700}
+input[type=color]{width:100%;height:56px;border:0;border-radius:10px;background:none;padding:0}
+input[type=range]{width:100%;height:34px}
+.sw{display:flex;gap:6px;margin-top:8px}
+.sw span{flex:1;height:30px;border-radius:8px;border:2px solid rgba(0,0,0,.2)}
+label{display:block;margin:8px 0 0;font-size:14px}
+#status{margin-top:8px;font-size:13px;color:var(--muted)}
+#status.err{color:var(--err)}
+#ctl{display:none}
+</style>
+</head>
+<body>
+<h1>Bike Lights <button id="pwr">ON</button></h1>
+
+<div class="card">
+  <button id="conn" class="on">Connect to BikeLights</button>
+  <div id="status">Not connected</div>
+</div>
+
+<div id="ctl">
+  <div class="card"><h2>Which light?</h2>
+    <div class="row" id="tabs"><button data-t="0">Front</button><button data-t="1">Back</button><button data-t="2" class="on">Both</button></div>
+  </div>
+
+  <div class="card"><h2>Colour</h2>
+    <input type="color" id="col" value="#ffffff">
+    <div class="sw" id="sw"></div>
+    <label>Brightness</label><input type="range" id="bri" min="5" max="255">
+    <label>Speed</label><input type="range" id="spd" min="1" max="100">
+  </div>
+
+  <div class="card"><h2>Mode</h2><div class="grid" id="modes"></div></div>
+
+  <div class="card"><h2>Indicators (stop after 20 s)</h2>
+    <div class="row"><button id="sg1">&#9664; Left</button><button id="sg3">Hazard</button><button id="sg2">Right &#9654;</button></div>
+  </div>
+
+  <div class="card"><h2>Presets</h2><div class="grid" id="pre"></div></div>
+</div>
+
+<script>
+const SERVICE="6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const RX="6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+const ST="6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const MODES=["Solid","Breathe","Flash","Rainbow","Colour fade","Chase","Scanner","Twinkle","Fire","Red-Blue"];
+const PRESETS=["Commuter","Be seen","Party","Chill"];
+const SWATCH=["#ffffff","#ff0000","#ff7a00","#ffd000","#00ff40","#00e5ff","#2060ff","#b000ff","#ff00a0"];
+const $=id=>document.getElementById(id);
+let dev=null,rx=null,st=null,S=null,T=2,busy=false,pend=null,sigTimer=null;
+const enc=new TextEncoder(),dec=new TextDecoder(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+function status(t,err){$('status').textContent=t;$('status').className=err?'err':'';}
+function cur(){return S.l[T===2?0:T];}
+function paint(){
+  if(!S)return;
+  const L=cur();
+  $('col').value='#'+L.c;$('bri').value=L.b;$('spd').value=L.s;
+  [...$('modes').children].forEach((b,i)=>b.classList.toggle('on',i===L.m));
+  $('pwr').classList.toggle('on',!!S.p);$('pwr').textContent=S.p?'ON':'OFF';
+  [1,2,3].forEach(v=>$('sg'+v).classList.toggle('on',S.g===v));
+}
+async function write(cmd){await rx.writeValue(enc.encode(cmd));}
+async function readState(){
+  const v=await st.readValue();
+  S=JSON.parse(dec.decode(v));paint();
+}
+// slider/colour/mode changes: one short command per value, latest value wins
+function send(p){
+  if(!S||!rx)return;
+  for(const i of (T===2?[0,1]:[T])){
+    const L=S.l[i];
+    if('m' in p)L.m=p.m;if('c' in p)L.c=p.c;if('b' in p)L.b=p.b;if('s' in p)L.s=p.s;
+  }
+  pend=Object.assign(pend||{},p);
+  if(!busy)flush();
+}
+async function flush(){
+  busy=true;
+  try{
+    while(pend){
+      const p=pend;pend=null;
+      for(const k of Object.keys(p))await write('l='+T+' '+k+'='+p[k]);
+    }
+  }catch(e){status('Send failed - check the connection',true);}
+  busy=false;
+}
+async function action(cmd){
+  if(!rx)return;
+  try{await write(cmd);await sleep(200);await readState();}
+  catch(e){status('Send failed - check the connection',true);}
+}
+
+async function link(){
+  status('Connecting...');
+  const srv=await dev.gatt.connect();
+  const svc=await srv.getPrimaryService(SERVICE);
+  rx=await svc.getCharacteristic(RX);
+  st=await svc.getCharacteristic(ST);
+  await readState();
+  $('ctl').style.display='block';
+  $('conn').textContent='Connected - tap to switch device';$('conn').classList.remove('on');
+  status('Connected to '+(dev.name||'BikeLights'));
+}
+async function drop(){
+  rx=null;st=null;
+  for(let i=0;i<5&&dev&&!dev.gatt.connected;i++){
+    status('Connection lost - reconnecting...',true);
+    await sleep(1500);
+    try{await link();return;}catch(e){}
+  }
+  if(!dev.gatt.connected){status('Disconnected - tap Connect',true);$('conn').textContent='Connect to BikeLights';$('conn').classList.add('on');}
+}
+$('conn').onclick=async()=>{
+  if(!navigator.bluetooth){status('This browser has no Bluetooth support. Use Chrome on Android, or the Bluefy app on iPhone.',true);return;}
+  try{
+    dev=await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE]}]});
+    dev.addEventListener('gattserverdisconnected',drop);
+    await link();
+  }catch(e){status(e.name==='NotFoundError'?'No device chosen':'Could not connect: '+e.message,true);}
+};
+
+MODES.forEach((n,i)=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>{send({m:i});paint();};$('modes').appendChild(b);});
+PRESETS.forEach((n,i)=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>action('pre='+i);$('pre').appendChild(b);});
+SWATCH.forEach(c=>{const s=document.createElement('span');s.style.background=c;s.onclick=()=>{$('col').value=c;send({c:c.slice(1)});};$('sw').appendChild(s);});
+[...$('tabs').children].forEach(b=>b.onclick=()=>{T=+b.dataset.t;[...$('tabs').children].forEach(x=>x.classList.toggle('on',x===b));paint();});
+$('col').oninput=e=>send({c:e.target.value.slice(1)});
+$('bri').oninput=e=>send({b:+e.target.value});
+$('spd').oninput=e=>send({s:+e.target.value});
+$('pwr').onclick=()=>{if(S)action('pw='+(S.p?0:1));};
+[1,2,3].forEach(v=>$('sg'+v).onclick=()=>{
+  if(!S)return;
+  const m=S.g===v?0:v;S.g=m;paint();
+  clearTimeout(sigTimer);if(m)sigTimer=setTimeout(()=>{S.g=0;paint();},20000);
+  action('sg='+m);
+});
+</script>
+</body>
+</html>
