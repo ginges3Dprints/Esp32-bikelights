@@ -34,6 +34,8 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #status{margin-top:8px;font-size:13px;color:var(--muted)}
 #status.err{color:var(--err)}
 #ctl{display:none}
+#imumsg,#rate{margin-top:6px;font-size:13px;color:var(--muted)}
+#auto,#phone,#flip{width:100%;margin-top:8px}
 </style>
 </head>
 <body>
@@ -62,6 +64,15 @@ label{display:block;margin:8px 0 0;font-size:14px}
     <div class="row"><button id="sg1">&#9664; Left</button><button id="sg3">Hazard</button><button id="sg2">Right &#9654;</button></div>
   </div>
 
+  <div class="card"><h2>Auto indicators</h2>
+    <button id="phone">Detect turns with this phone: OFF</button>
+    <div id="rate"></div>
+    <label>Sensitivity</label><input type="range" id="sens" min="1" max="100">
+    <button id="flip">Left/right swapped: NO</button>
+    <button id="auto">Wired turn sensor: OFF</button>
+    <div id="imumsg"></div>
+  </div>
+
   <div class="card"><h2>Presets</h2><div class="grid" id="pre"></div></div>
 </div>
 
@@ -85,10 +96,16 @@ function paint(){
   [...$('modes').children].forEach((b,i)=>b.classList.toggle('on',i===L.m));
   $('pwr').classList.toggle('on',!!S.p);$('pwr').textContent=S.p?'ON':'OFF';
   [1,2,3].forEach(v=>$('sg'+v).classList.toggle('on',S.g===v));
+  $('auto').style.display=(S.i===0)?'none':'block';
+  $('auto').classList.toggle('on',!!S.a);$('auto').textContent='Wired turn sensor: '+(S.a?'ON':'OFF');
+  if('t' in S)$('sens').value=S.t;
+  $('imumsg').textContent=(S.i===0)?'No wired turn sensor in the hub - the phone option above does the same job.':'';
 }
-async function write(cmd){await rx.writeValue(enc.encode(cmd));}
+let chain=Promise.resolve();
+function gatt(fn){const p=chain.then(fn);chain=p.catch(()=>{});return p;}
+function write(cmd){return gatt(()=>rx.writeValue(enc.encode(cmd)));}
 async function readState(){
-  const v=await st.readValue();
+  const v=await gatt(()=>st.readValue());
   S=JSON.parse(dec.decode(v));paint();
 }
 // slider/colour/mode changes: one short command per value, latest value wins
@@ -153,9 +170,73 @@ SWATCH.forEach(c=>{const s=document.createElement('span');s.style.background=c;s
 $('col').oninput=e=>send({c:e.target.value.slice(1)});
 $('bri').oninput=e=>send({b:+e.target.value});
 $('spd').oninput=e=>send({s:+e.target.value});
+// ----- turn detection with the phone's motion sensors -----
+const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let phoneOn=false,pFlip=false,accF=null,yaw=0,candDir=0,candSince=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false;
+try{pFlip=localStorage.getItem('flip')==='1';}catch(e){}
+function showFlip(){$('flip').textContent='Left/right swapped: '+(pFlip?'YES':'NO');$('flip').classList.toggle('on',pFlip);}
+async function wake(){try{if(navigator.wakeLock)await navigator.wakeLock.request('screen');}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(phoneOn&&document.visibilityState==='visible')wake();});
+function setSig(m){
+  phoneSig=m;pSent=performance.now();
+  if(S){S.g=m;paint();}
+  if(rx)write('sg='+m).catch(()=>{});
+}
+function onMotion(e){
+  const r=e.rotationRate,a=e.accelerationIncludingGravity;
+  if(!r||!a||r.alpha==null||a.x==null)return;
+  gotMotion=true;
+  const now=performance.now();
+  const acc=[a.x,a.y,a.z];
+  if(!accF)accF=acc.slice();else for(let k=0;k<3;k++)accF[k]+=0.03*(acc[k]-accF[k]);
+  const mag=Math.hypot(accF[0],accF[1],accF[2]);
+  if(mag<1)return;
+  let w=(IOS?-1:1)*(r.beta*accF[0]+r.gamma*accF[1]+r.alpha*accF[2])/mag;   // + = turning left
+  if(pFlip)w=-w;
+  yaw+=0.15*(w-yaw);
+  if(now-lastShow>200){lastShow=now;$('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>3?'left':yaw<-3?'right':'straight')+')';}
+  if(!S||!rx)return;
+  const thr=30-0.24*(+$('sens').value),calm=thr*0.4;
+  if(!phoneSig){
+    if(S.g!==0){candDir=0;return;}
+    const dir=yaw>thr?1:yaw<-thr?2:0;
+    if(dir!==candDir){candDir=dir;candSince=now;}
+    else if(dir&&now-candSince>350){pStart=now;calmSince=0;setSig(dir);}
+  }else{
+    if(now-pSent>12000)setSig(phoneSig);
+    if(Math.abs(yaw)<calm){
+      if(!calmSince)calmSince=now;
+      if(now-calmSince>1200&&now-pStart>1500){candDir=0;setSig(0);}
+    }else calmSince=0;
+  }
+}
+$('phone').onclick=async()=>{
+  if(phoneOn){
+    phoneOn=false;window.removeEventListener('devicemotion',onMotion);
+    if(phoneSig)setSig(0);
+    accF=null;$('rate').textContent='';
+    $('phone').classList.remove('on');$('phone').textContent='Detect turns with this phone: OFF';return;
+  }
+  try{
+    if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){
+      const res=await DeviceMotionEvent.requestPermission();
+      if(res!=='granted'){$('rate').textContent='Motion access was not allowed';return;}
+    }
+  }catch(e){$('rate').textContent='Could not get motion access: '+e.message;return;}
+  phoneOn=true;gotMotion=false;
+  window.addEventListener('devicemotion',onMotion);wake();
+  $('phone').classList.add('on');$('phone').textContent='Detect turns with this phone: ON';
+  $('rate').textContent='Starting...';
+  setTimeout(()=>{if(phoneOn&&!gotMotion)$('rate').textContent='No motion data from this browser';},2500);
+};
+$('flip').onclick=()=>{pFlip=!pFlip;try{localStorage.setItem('flip',pFlip?'1':'0');}catch(e){}showFlip();};
+showFlip();
+$('auto').onclick=()=>{if(S)action('at='+(S.a?0:1));};
+$('sens').oninput=e=>send({ts:+e.target.value});
 $('pwr').onclick=()=>{if(S)action('pw='+(S.p?0:1));};
 [1,2,3].forEach(v=>$('sg'+v).onclick=()=>{
   if(!S)return;
+  phoneSig=0;
   const m=S.g===v?0:v;S.g=m;paint();
   clearTimeout(sigTimer);if(m)sigTimer=setTimeout(()=>{S.g=0;paint();},20000);
   action('sg='+m);
