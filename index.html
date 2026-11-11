@@ -172,7 +172,7 @@ $('bri').oninput=e=>send({b:+e.target.value});
 $('spd').oninput=e=>send({s:+e.target.value});
 // ----- turn detection with the phone's motion sensors -----
 const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let phoneOn=false,pFlip=false,accF=null,yaw=0,candDir=0,candSince=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false;
+let phoneOn=false,pFlip=false,accF=null,yaw=0,candDir=0,candSince=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false,lastT=0,theta=0,refractUntil=0;
 try{pFlip=localStorage.getItem('flip')==='1';}catch(e){}
 function showFlip(){$('flip').textContent='Left/right swapped: '+(pFlip?'YES':'NO');$('flip').classList.toggle('on',pFlip);}
 async function wake(){try{if(navigator.wakeLock)await navigator.wakeLock.request('screen');}catch(e){}}
@@ -187,6 +187,7 @@ function onMotion(e){
   if(!r||!a||r.alpha==null||a.x==null)return;
   gotMotion=true;
   const now=performance.now();
+  const dt=lastT?Math.min((now-lastT)/1000,0.1):0.016;lastT=now;
   const acc=[a.x,a.y,a.z];
   if(!accF)accF=acc.slice();else for(let k=0;k<3;k++)accF[k]+=0.03*(acc[k]-accF[k]);
   const mag=Math.hypot(accF[0],accF[1],accF[2]);
@@ -194,20 +195,27 @@ function onMotion(e){
   let w=(IOS?-1:1)*(r.beta*accF[0]+r.gamma*accF[1]+r.alpha*accF[2])/mag;   // + = turning left
   if(pFlip)w=-w;
   yaw+=0.15*(w-yaw);
-  if(now-lastShow>200){lastShow=now;$('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>3?'left':yaw<-3?'right':'straight')+')';}
+  const thr=30-0.24*(+$('sens').value),calm=Math.max(thr*0.4,4);
+  if(now-lastShow>200){
+    lastShow=now;
+    $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+')'
+      +(phoneSig?' | turned '+Math.max(0,theta).toFixed(0)+' deg | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
+  }
   if(!S||!rx)return;
-  const thr=30-0.24*(+$('sens').value),calm=thr*0.4;
   if(!phoneSig){
-    if(S.g!==0){candDir=0;return;}
+    if(S.g!==0||now<refractUntil){candDir=0;return;}
     const dir=yaw>thr?1:yaw<-thr?2:0;
     if(dir!==candDir){candDir=dir;candSince=now;}
-    else if(dir&&now-candSince>350){pStart=now;calmSince=0;setSig(dir);}
+    else if(dir&&now-candSince>500){pStart=now;calmSince=0;theta=0;setSig(dir);}
   }else{
+    theta+=(phoneSig===1?1:-1)*yaw*dt;               // degrees turned the way we indicated
     if(now-pSent>12000)setSig(phoneSig);
-    if(Math.abs(yaw)<calm){
-      if(!calmSince)calmSince=now;
-      if(now-calmSince>1200&&now-pStart>1500){candDir=0;setSig(0);}
-    }else calmSince=0;
+    if(Math.abs(yaw)<calm){if(!calmSince)calmSince=now;}else calmSince=0;
+    const calmFor=calmSince?now-calmSince:0,on=now-pStart;
+    // off when the turn is finished (turned enough and steady again), or steady for a long time, or far too long
+    if((on>3000&&((calmFor>1000&&theta>40)||calmFor>3000))||on>20000){
+      candDir=0;refractUntil=now+2500;setSig(0);   // ignore the straightening-up wobble for a moment
+    }
   }
 }
 $('phone').onclick=async()=>{
