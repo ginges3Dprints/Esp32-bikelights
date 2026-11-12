@@ -35,7 +35,8 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #status.err{color:var(--err)}
 #ctl{display:none}
 #imumsg,#rate{margin-top:6px;font-size:13px;color:var(--muted)}
-#auto,#phone,#flip{width:100%;margin-top:8px}
+#auto,#phone,#flip,#swf,#swb{width:100%;margin-top:8px}
+#laymsg{margin-top:6px;font-size:13px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -62,6 +63,12 @@ label{display:block;margin:8px 0 0;font-size:14px}
 
   <div class="card"><h2>Indicators (stop after 20 s)</h2>
     <div class="row"><button id="sg1">&#9664; Left</button><button id="sg3">Hazard</button><button id="sg2">Right &#9654;</button></div>
+  </div>
+
+  <div class="card" id="layout"><h2>Indicator layout</h2>
+    <button id="swf">Front: top row = LEFT</button>
+    <button id="swb">Back: left column = LEFT</button>
+    <div id="laymsg">Tap Left or Right above to test, and tap these to switch sides.</div>
   </div>
 
   <div class="card"><h2>Auto indicators</h2>
@@ -96,6 +103,11 @@ function paint(){
   [...$('modes').children].forEach((b,i)=>b.classList.toggle('on',i===L.m));
   $('pwr').classList.toggle('on',!!S.p);$('pwr').textContent=S.p?'ON':'OFF';
   [1,2,3].forEach(v=>$('sg'+v).classList.toggle('on',S.g===v));
+  $('layout').style.display=S.w?'block':'none';
+  if(S.w){
+    $('swf').textContent='Front: top row = '+(S.w[0]?'LEFT':'RIGHT');
+    $('swb').textContent='Back: left column = '+(S.w[1]?'RIGHT':'LEFT');
+  }
   $('auto').style.display=(S.i===0)?'none':'block';
   $('auto').classList.toggle('on',!!S.a);$('auto').textContent='Wired turn sensor: '+(S.a?'ON':'OFF');
   if('t' in S)$('sens').value=S.t;
@@ -239,6 +251,8 @@ $('phone').onclick=async()=>{
 };
 $('flip').onclick=()=>{pFlip=!pFlip;try{localStorage.setItem('flip',pFlip?'1':'0');}catch(e){}showFlip();};
 showFlip();
+$('swf').onclick=()=>{if(S&&S.w)action('fs='+(S.w[0]?0:1));};
+$('swb').onclick=()=>{if(S&&S.w)action('bs='+(S.w[1]?0:1));};
 $('auto').onclick=()=>{if(S)action('at='+(S.a?0:1));};
 $('sens').oninput=e=>send({ts:+e.target.value});
 $('pwr').onclick=()=>{if(S)action('pw='+(S.p?0:1));};
