@@ -2,7 +2,7 @@
 
 Smart bike lights you can print and control from your phone. A **hub** holds the ESP32 and the battery, and a **front light** and **back light** (WS2812B LED strip) plug into it. Control colours, modes and indicators over Bluetooth, with no WiFi to join.
 
-**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE) COMING SOON!!
+**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE)
 
 > Not waterproof as printed, and not a certified bike light. Check your local rules for bike lighting.
 
@@ -44,7 +44,7 @@ Optional: an MPU6050 sensor (SDA to GPIO 21, SCL to GPIO 22, 3.3V, GND) can dete
 1. Install the Arduino IDE and add ESP32 board support.
 2. Install the **FastLED** library (Library Manager).
 3. Open `bike_lights_ble.ino`.
-4. Near the top, check `FRONT_LEDS` and `BACK_LEDS` match your lights. If you want wireless updates, also set `WIFI_SSID`, `WIFI_PASS` and change `OTA_PASS`.
+4. Near the top, check `FRONT_LEDS` and `BACK_LEDS` match your lights, and change `OTA_PASS` (the password for wireless updates). You do **not** put your WiFi in the code. You type it into the phone dashboard.
 5. Board: **ESP32 Dev Module**. Partition Scheme: **Minimal SPIFFS (1.9MB APP with OTA)**.
 6. Upload.
 
@@ -78,19 +78,20 @@ iPhone alternative: the free **Bluefruit Connect** app (Controller screen) gives
 
 ## Update the code without a cable
 
-1. On the dashboard, tap **Start update mode** (park the bike first).
-2. The ESP32 joins your home WiFi for up to 10 minutes.
+1. **First time only:** in the dashboard's **Update firmware** card, type your home WiFi name and password and tap **Save WiFi to the lights**. They are saved on the ESP32.
+2. Park the bike and tap **Start update mode**. The ESP32 joins your home WiFi for up to 10 minutes.
 3. In the Arduino IDE, choose the network port **bikelights** and upload as normal. Or open the web address shown on the dashboard on a computer on the same WiFi and upload a file made with Sketch, then Export Compiled Binary.
 
 The password is `OTA_PASS` from the code.
 
 ## Troubleshooting
 
+- **"Sketch too big" when uploading:** in the Arduino IDE open the **Tools** menu, then **Partition Scheme**, and choose **Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)**. The yellow `#pragma message` lines in the output are harmless notes, not errors.
 - **BikeLights does not show up:** check the ESP32 has power, Bluetooth is on, and you are using Bluefy (iPhone) or Chrome (Android).
 - **The dashboard looks old:** close it completely and open it again.
 - **Left and right are on the wrong sides:** use **Indicator layout**.
 - **Battery percentage looks wrong:** change `BATT_CAL` in the code a little (for example 1.02).
-- **Update mode cannot join WiFi:** check the WiFi name and password in the code. It must be a 2.4 GHz network.
+- **Update mode cannot join WiFi:** save the WiFi name and password again in the dashboard. It must be a 2.4 GHz network. **Forget saved WiFi** clears it.
 - **ESP32 restarts when the lights are bright:** lower `MAX_MILLIAMPS` in the code.
 
 ## Safety and disclaimer

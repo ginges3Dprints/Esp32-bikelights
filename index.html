@@ -36,9 +36,11 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #ctl{display:none}
 #batt{font-size:15px;font-weight:700}
 #updmsg{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.4}
-#updbtn{width:100%}
-#imumsg,#rate{margin-top:6px;font-size:13px;color:var(--muted)}
-#auto,#phone,#flip,#swf,#swb{width:100%;margin-top:8px}
+#updbtn,#wsave,#wclear{width:100%;margin-top:8px}
+#upd input{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:16px;font-family:inherit}
+#wsaved{font-size:13px;color:var(--muted)}
+#imumsg,#rate,#peak{margin-top:6px;font-size:13px;color:var(--muted)}
+#auto,#phone,#flip,#swf,#swb,#peakbtn{width:100%;margin-top:8px}
 #laymsg{margin-top:6px;font-size:13px;color:var(--muted)}
 </style>
 </head>
@@ -77,13 +79,20 @@ label{display:block;margin:8px 0 0;font-size:14px}
   <div class="card"><h2>Auto indicators</h2>
     <button id="phone">Detect turns with this phone: OFF</button>
     <div id="rate"></div>
+    <div id="peak"></div>
     <label>Sensitivity</label><input type="range" id="sens" min="1" max="100">
     <button id="flip">Left/right swapped: NO</button>
+    <button id="peakbtn">Show last turn details: OFF</button>
     <button id="auto">Wired turn sensor: OFF</button>
     <div id="imumsg"></div>
   </div>
 
   <div class="card" id="upd"><h2>Update firmware</h2>
+    <div id="wsaved"></div>
+    <input id="wssid" placeholder="Home WiFi name" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input id="wpass" type="password" placeholder="Home WiFi password" autocomplete="off" autocapitalize="off" autocorrect="off">
+    <button id="wsave">Save WiFi to the lights</button>
+    <button id="wclear">Forget saved WiFi</button>
     <button id="updbtn">Start update mode</button>
     <div id="updmsg"></div>
   </div>
@@ -119,12 +128,14 @@ function paint(){
   else bt.textContent='';
   $('upd').style.display=('u' in S)?'block':'none';
   if('u' in S){
+    $('wsaved').textContent=S.wn?'Saved WiFi: '+S.wn:'No WiFi saved yet';
     $('updbtn').textContent=(S.u===1||S.u===2)?'Stop update mode':'Start update mode';
     $('updbtn').classList.toggle('on',S.u===1||S.u===2);
     $('updmsg').textContent=
       S.u===1?'Joining the WiFi...':
       S.u===2?'Ready. In the Arduino IDE pick the network port "bikelights" and upload as normal, or open http://'+S.ip+'/update on a computer on the same WiFi. It switches off by itself after 10 minutes.':
-      S.u===3?'Could not join the WiFi - check the WiFi name and password in the ESP32 code.':
+      S.u===3?'Could not join the WiFi - check the WiFi name and password you saved above (2.4 GHz WiFi only).':
+      S.u===4?'Type your home WiFi name and password above and tap Save WiFi first.':
       'Turns on WiFi for a few minutes so you can update the lights without a cable. Do this when the bike is parked.';
   }
   $('layout').style.display=S.w?'block':'none';
@@ -196,7 +207,7 @@ setInterval(async()=>{
   try{
     const v=await gatt(()=>st.readValue());
     const j=JSON.parse(dec.decode(v));
-    Object.assign(S,{p:j.p,g:j.g,bp:j.bp,bv:j.bv,u:j.u,ip:j.ip});paint();
+    Object.assign(S,{p:j.p,g:j.g,bp:j.bp,bv:j.bv,u:j.u,ip:j.ip,wn:j.wn});paint();
   }catch(e){}
 },4000);
 $('conn').onclick=async()=>{
@@ -227,6 +238,41 @@ function setSig(m){
   if(S){S.g=m;paint();}
   if(rx)write('sg='+m).catch(()=>{});
 }
+// ----- "last turn" line: peak turn rate of the most recent turn -----
+let showPeak=false,tOn=false,tArm=0,tPeak=0,tDir=0,tStart=0,tAngle=0,tCalm=0,tTrig=false,lastTurn=null;
+try{showPeak=localStorage.getItem('peak')==='1';}catch(e){}
+function showTurn(){
+  $('peakbtn').textContent='Show last turn details: '+(showPeak?'ON':'OFF');
+  $('peakbtn').classList.toggle('on',showPeak);
+  if(!showPeak){$('peak').textContent='';return;}
+  if(!lastTurn){$('peak').textContent='Last turn: none yet';return;}
+  const t=lastTurn;
+  $('peak').textContent='Last turn: '+(t.dir===1?'left':'right')+', peak '+t.peak.toFixed(0)+' deg/s, '
+    +t.secs.toFixed(1)+' s, '+t.deg.toFixed(0)+' deg - '
+    +(t.trig?'indicator came on':'indicator did not come on (limit was '+t.thr.toFixed(0)+' deg/s)');
+}
+function trackTurn(now,dt){
+  const ay=Math.abs(yaw);
+  if(!tOn){
+    if(ay>6){if(!tArm)tArm=now;if(now-tArm>300){tOn=true;tStart=tArm;tPeak=ay;tDir=yaw>0?1:2;tAngle=0;tCalm=0;tTrig=false;}}
+    else tArm=0;
+  }
+  if(tOn){
+    tAngle+=yaw*dt;
+    if(ay>tPeak){tPeak=ay;tDir=yaw>0?1:2;}
+    if(phoneSig)tTrig=true;
+    if(ay<4){
+      if(!tCalm)tCalm=now;
+      if(now-tCalm>1000){
+        lastTurn={peak:tPeak,dir:tDir,secs:(now-1000-tStart)/1000,deg:Math.abs(tAngle),trig:tTrig,thr:30-0.24*(+$('sens').value)};
+        tOn=false;tArm=0;showTurn();
+      }
+    }else tCalm=0;
+  }
+}
+$('peakbtn').onclick=()=>{showPeak=!showPeak;try{localStorage.setItem('peak',showPeak?'1':'0');}catch(e){}showTurn();};
+showTurn();
+
 function onMotion(e){
   const r=e.rotationRate,a=e.accelerationIncludingGravity;
   if(!r||!a||r.alpha==null||a.x==null)return;
@@ -246,6 +292,7 @@ function onMotion(e){
     $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+')'
       +(phoneSig?' | turned '+Math.max(0,theta).toFixed(0)+' deg | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
   }
+  trackTurn(now,dt);
   if(!S||!rx)return;
   if(!phoneSig){
     if(S.g!==0||now<refractUntil){candDir=0;return;}
@@ -284,6 +331,26 @@ $('phone').onclick=async()=>{
 };
 $('flip').onclick=()=>{pFlip=!pFlip;try{localStorage.setItem('flip',pFlip?'1':'0');}catch(e){}showFlip();};
 showFlip();
+// WiFi name / password are sent in small pieces so every message is short
+function pieces(s){
+  const out=[];let cur='',len=0;
+  for(const ch of s){const l=enc.encode(ch).length;if(len+l>14){out.push(cur);cur='';len=0;}cur+=ch;len+=l;}
+  if(cur||!out.length)out.push(cur);
+  return out;
+}
+$('wsave').onclick=async()=>{
+  if(!S||!rx)return;
+  const ssid=$('wssid').value,pass=$('wpass').value;
+  if(!ssid){$('updmsg').textContent='Type your WiFi name first.';return;}
+  try{
+    const a=pieces(ssid);for(let i=0;i<a.length;i++)await write((i?'n1=':'n0=')+a[i]);
+    const b=pieces(pass);for(let i=0;i<b.length;i++)await write((i?'p1=':'p0=')+b[i]);
+    await write('wsave=1');await sleep(250);await readState();
+    $('wpass').value='';$('wssid').value='';
+    $('updmsg').textContent='WiFi saved on the lights. Now tap Start update mode when you want to update.';
+  }catch(e){$('updmsg').textContent='Could not save the WiFi - check the Bluetooth connection.';}
+};
+$('wclear').onclick=()=>{if(S&&('u' in S))action('wclr=1');};
 $('updbtn').onclick=()=>{if(S&&('u' in S))action('up='+((S.u===1||S.u===2)?0:1));};
 $('swf').onclick=()=>{if(S&&S.w)action('fs='+(S.w[0]?0:1));};
 $('swb').onclick=()=>{if(S&&S.w)action('bs='+(S.w[1]?0:1));};
