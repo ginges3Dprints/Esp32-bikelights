@@ -93,6 +93,14 @@ The password is `OTA_PASS` from the code.
 - **Update mode cannot join WiFi:** check the WiFi name and password in the code. It must be a 2.4 GHz network.
 - **ESP32 restarts when the lights are bright:** lower `MAX_MILLIAMPS` in the code.
 
-## Safety
+## Safety and disclaimer
 
-Use a battery with a protection board, keep it away from heat, and do not puncture it. Do not ride in a way that depends on these lights alone being legal where you live.
+**Please read before you build or ride.**
+
+- This project is shared **as is**, with **no warranty** of any kind. You build, wire, charge and use it **at your own risk**.
+- I am **not responsible** for any injury, accident, fire, damage or loss that results from building or using it, including any problem with the 3D model, the code, the wiring or the batteries.
+- It is **not a certified bike light** and has not been tested to any lighting standard. Do not rely on it as your only lights, and check the lighting rules where you live.
+- The **auto indicators are experimental**. Always check your surroundings and use hand signals as normal.
+- **Batteries can be dangerous.** Use a battery with a protection board, charge it with a proper charger, keep it away from heat, and do not puncture or crush it. Stop using it if it swells or gets hot.
+- Check your wiring and the boost converter's 5V output with a multimeter before connecting the ESP32 or the lights.
+- The parts are **not waterproof** as printed.
