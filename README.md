@@ -68,6 +68,7 @@ iPhone alternative: the free **Bluefruit Connect** app (Controller screen) gives
 - **Indicator layout:** if left and right flash the wrong LEDs, tap the Front or Back button to swap sides. Tap Left or Right to test.
 - **Auto indicators** (experimental): your phone's motion sensors turn the indicator on when the bike turns and off when you are straight again.
   - Tap **Detect turns with this phone** and allow motion access.
+  - It then **calibrates**: keep the bike upright and still for 3 seconds. Tap **Recalibrate** whenever the phone moves in its holder.
   - Keep the dashboard open with the screen on.
   - Use the **Sensitivity** slider if it comes on too easily or not at all.
   - If it says left when you turn right, tap **Left/right swapped**.

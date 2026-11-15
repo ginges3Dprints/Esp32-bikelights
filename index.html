@@ -40,7 +40,7 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #upd input{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:16px;font-family:inherit}
 #wsaved{font-size:13px;color:var(--muted)}
 #imumsg,#rate,#peak{margin-top:6px;font-size:13px;color:var(--muted)}
-#auto,#phone,#flip,#swf,#swb,#peakbtn{width:100%;margin-top:8px}
+#auto,#phone,#flip,#swf,#swb,#peakbtn,#cal{width:100%;margin-top:8px}
 #laymsg{margin-top:6px;font-size:13px;color:var(--muted)}
 </style>
 </head>
@@ -78,6 +78,7 @@ label{display:block;margin:8px 0 0;font-size:14px}
 
   <div class="card"><h2>Auto indicators</h2>
     <button id="phone">Detect turns with this phone: OFF</button>
+    <button id="cal" style="display:none">Recalibrate (keep the bike upright and still)</button>
     <div id="rate"></div>
     <div id="peak"></div>
     <label>Sensitivity</label><input type="range" id="sens" min="1" max="100">
@@ -228,7 +229,9 @@ $('bri').oninput=e=>send({b:+e.target.value});
 $('spd').oninput=e=>send({s:+e.target.value});
 // ----- turn detection with the phone's motion sensors -----
 const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let phoneOn=false,pFlip=false,accF=null,yaw=0,candDir=0,candSince=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false,lastT=0,theta=0,refractUntil=0;
+let phoneOn=false,pFlip=false,yaw=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false,lastT=0,theta=0,refractUntil=0;
+let calState=0,calStart=0,calN=0,calAcc=[0,0,0],calGyr=[0,0,0],calUp=null,calBias=null;
+let win=[],winSum=0;
 try{pFlip=localStorage.getItem('flip')==='1';}catch(e){}
 function showFlip(){$('flip').textContent='Left/right swapped: '+(pFlip?'YES':'NO');$('flip').classList.toggle('on',pFlip);}
 async function wake(){try{if(navigator.wakeLock)await navigator.wakeLock.request('screen');}catch(e){}}
@@ -238,8 +241,13 @@ function setSig(m){
   if(S){S.g=m;paint();}
   if(rx)write('sg='+m).catch(()=>{});
 }
-// ----- "last turn" line: peak turn rate of the most recent turn -----
-let showPeak=false,tOn=false,tArm=0,tPeak=0,tDir=0,tStart=0,tAngle=0,tCalm=0,tTrig=false,lastTurn=null;
+// angle turned (degrees) over the last 1.5 s is added up, so bumps and wobble cancel out
+function addWin(now,d){win.push([now,d]);winSum+=d;while(win.length&&now-win[0][0]>1500)winSum-=win.shift()[1];}
+function winAngle(now,ms){let s=0;for(let i=win.length-1;i>=0&&now-win[i][0]<=ms;i--)s+=win[i][1];return s;}
+function startAngle(){return 40-0.3*(+$('sens').value);}   // sensitivity 1 = 40 deg, 100 = 10 deg in 1.5 s
+
+// ----- "last turn" line -----
+let showPeak=false,tOn=false,tArm=0,tPeak=0,tPeakA=0,tDir=0,tStart=0,tAngle=0,tCalm=0,tTrig=false,lastTurn=null;
 try{showPeak=localStorage.getItem('peak')==='1';}catch(e){}
 function showTurn(){
   $('peakbtn').textContent='Show last turn details: '+(showPeak?'ON':'OFF');
@@ -248,23 +256,24 @@ function showTurn(){
   if(!lastTurn){$('peak').textContent='Last turn: none yet';return;}
   const t=lastTurn;
   $('peak').textContent='Last turn: '+(t.dir===1?'left':'right')+', peak '+t.peak.toFixed(0)+' deg/s, '
-    +t.secs.toFixed(1)+' s, '+t.deg.toFixed(0)+' deg - '
-    +(t.trig?'indicator came on':'indicator did not come on (limit was '+t.thr.toFixed(0)+' deg/s)');
+    +t.secs.toFixed(1)+' s, '+t.deg.toFixed(0)+' deg turned - '
+    +(t.trig?'indicator came on':'indicator did not come on (needed '+t.thr.toFixed(0)+' deg in 1.5 s, best was '+t.ang.toFixed(0)+')');
 }
 function trackTurn(now,dt){
   const ay=Math.abs(yaw);
   if(!tOn){
-    if(ay>6){if(!tArm)tArm=now;if(now-tArm>300){tOn=true;tStart=tArm;tPeak=ay;tDir=yaw>0?1:2;tAngle=0;tCalm=0;tTrig=false;}}
+    if(ay>6){if(!tArm)tArm=now;if(now-tArm>300){tOn=true;tStart=tArm;tPeak=ay;tPeakA=Math.abs(winSum);tDir=yaw>0?1:2;tAngle=0;tCalm=0;tTrig=false;}}
     else tArm=0;
   }
   if(tOn){
     tAngle+=yaw*dt;
     if(ay>tPeak){tPeak=ay;tDir=yaw>0?1:2;}
+    tPeakA=Math.max(tPeakA,Math.abs(winSum));
     if(phoneSig)tTrig=true;
     if(ay<4){
       if(!tCalm)tCalm=now;
       if(now-tCalm>1000){
-        lastTurn={peak:tPeak,dir:tDir,secs:(now-1000-tStart)/1000,deg:Math.abs(tAngle),trig:tTrig,thr:30-0.24*(+$('sens').value)};
+        lastTurn={peak:tPeak,dir:tDir,secs:(now-1000-tStart)/1000,deg:Math.abs(tAngle),trig:tTrig,thr:startAngle(),ang:tPeakA};
         tOn=false;tArm=0;showTurn();
       }
     }else tCalm=0;
@@ -273,48 +282,74 @@ function trackTurn(now,dt){
 $('peakbtn').onclick=()=>{showPeak=!showPeak;try{localStorage.setItem('peak',showPeak?'1':'0');}catch(e){}showTurn();};
 showTurn();
 
+// ----- calibration: bike upright and still for 3 seconds -----
+function startCal(){calState=1;calStart=0;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];if(phoneSig)setSig(0);}
+function calibrate(now,acc,r){
+  if(!calStart)calStart=now;
+  const gm=Math.hypot(r.beta,r.gamma,r.alpha);
+  const mean=calN?calAcc.map(v=>v/calN):acc;
+  const dev=Math.hypot(acc[0]-mean[0],acc[1]-mean[1],acc[2]-mean[2]);
+  if(gm>10||dev>1.5){calStart=now;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];$('rate').textContent='Calibrating... the phone moved, keep the bike still';return;}
+  calN++;for(let k=0;k<3;k++)calAcc[k]+=acc[k];
+  calGyr[0]+=r.beta;calGyr[1]+=r.gamma;calGyr[2]+=r.alpha;
+  $('rate').textContent='Calibrating... keep the bike upright and still ('+Math.ceil(Math.max(0,3-(now-calStart)/1000))+')';
+  if(now-calStart>=3000&&calN>50){
+    const m=calAcc.map(v=>v/calN),mag=Math.hypot(m[0],m[1],m[2]);
+    if(mag<5){calStart=0;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];$('rate').textContent='Calibration failed - could not feel gravity, trying again';return;}
+    calUp=m.map(v=>(IOS?-1:1)*v/mag);
+    calBias=[calGyr[0]/calN,calGyr[1]/calN,calGyr[2]/calN];
+    calState=2;win=[];winSum=0;yaw=0;lastT=0;refractUntil=now+1000;
+    $('rate').textContent='Calibrated. Ready.';
+  }
+}
+
+// ----- decide when to switch the indicator on and off -----
+function detect(now,dt,w){
+  const startA=startAngle(),stopA=startA*0.25;
+  if(!phoneSig){
+    if(S.g!==0||now<refractUntil)return;
+    if(Math.abs(winSum)>startA){pStart=now;calmSince=0;theta=0;setSig(winSum>0?1:2);}
+  }else{
+    const sgn=phoneSig===1?1:-1;
+    theta+=sgn*w*dt;                                   // degrees turned the way we indicated
+    if(now-pSent>12000)setSig(phoneSig);
+    if(sgn*winAngle(now,800)<stopA){if(!calmSince)calmSince=now;}else calmSince=0;
+    const calmFor=calmSince?now-calmSince:0,on=now-pStart;
+    // off when the turn is over (turned enough and steady again), or steady for a long time, or far too long
+    if((on>3000&&calmFor>700&&(theta>30||calmFor>3000))||on>20000){
+      refractUntil=now+2500;calmSince=0;setSig(0);   // ignore the straightening-up wobble for a moment
+    }
+  }
+}
+
 function onMotion(e){
   const r=e.rotationRate,a=e.accelerationIncludingGravity;
   if(!r||!a||r.alpha==null||a.x==null)return;
   gotMotion=true;
   const now=performance.now();
   const dt=lastT?Math.min((now-lastT)/1000,0.1):0.016;lastT=now;
-  const acc=[a.x,a.y,a.z];
-  if(!accF)accF=acc.slice();else for(let k=0;k<3;k++)accF[k]+=0.03*(acc[k]-accF[k]);
-  const mag=Math.hypot(accF[0],accF[1],accF[2]);
-  if(mag<1)return;
-  let w=(IOS?-1:1)*(r.beta*accF[0]+r.gamma*accF[1]+r.alpha*accF[2])/mag;   // + = turning left
+  if(calState===1){calibrate(now,[a.x,a.y,a.z],r);return;}
+  if(calState!==2)return;
+  // turn rate around the bike's upright direction (found during calibration), + = turning left
+  let w=(r.beta-calBias[0])*calUp[0]+(r.gamma-calBias[1])*calUp[1]+(r.alpha-calBias[2])*calUp[2];
   if(pFlip)w=-w;
   yaw+=0.15*(w-yaw);
-  const thr=30-0.24*(+$('sens').value),calm=Math.max(thr*0.4,4);
+  addWin(now,w*dt);
   if(now-lastShow>200){
     lastShow=now;
-    $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+')'
-      +(phoneSig?' | turned '+Math.max(0,theta).toFixed(0)+' deg | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
+    $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+') | last 1.5 s: '+winSum.toFixed(0)+' deg'
+      +(phoneSig?' | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
   }
   trackTurn(now,dt);
   if(!S||!rx)return;
-  if(!phoneSig){
-    if(S.g!==0||now<refractUntil){candDir=0;return;}
-    const dir=yaw>thr?1:yaw<-thr?2:0;
-    if(dir!==candDir){candDir=dir;candSince=now;}
-    else if(dir&&now-candSince>500){pStart=now;calmSince=0;theta=0;setSig(dir);}
-  }else{
-    theta+=(phoneSig===1?1:-1)*yaw*dt;               // degrees turned the way we indicated
-    if(now-pSent>12000)setSig(phoneSig);
-    if(Math.abs(yaw)<calm){if(!calmSince)calmSince=now;}else calmSince=0;
-    const calmFor=calmSince?now-calmSince:0,on=now-pStart;
-    // off when the turn is finished (turned enough and steady again), or steady for a long time, or far too long
-    if((on>3000&&((calmFor>1000&&theta>40)||calmFor>3000))||on>20000){
-      candDir=0;refractUntil=now+2500;setSig(0);   // ignore the straightening-up wobble for a moment
-    }
-  }
+  detect(now,dt,w);
 }
+$('cal').onclick=()=>{if(phoneOn)startCal();};
 $('phone').onclick=async()=>{
   if(phoneOn){
     phoneOn=false;window.removeEventListener('devicemotion',onMotion);
     if(phoneSig)setSig(0);
-    accF=null;$('rate').textContent='';
+    calState=0;$('cal').style.display='none';$('rate').textContent='';
     $('phone').classList.remove('on');$('phone').textContent='Detect turns with this phone: OFF';return;
   }
   try{
@@ -323,9 +358,10 @@ $('phone').onclick=async()=>{
       if(res!=='granted'){$('rate').textContent='Motion access was not allowed';return;}
     }
   }catch(e){$('rate').textContent='Could not get motion access: '+e.message;return;}
-  phoneOn=true;gotMotion=false;
+  phoneOn=true;gotMotion=false;startCal();
   window.addEventListener('devicemotion',onMotion);wake();
   $('phone').classList.add('on');$('phone').textContent='Detect turns with this phone: ON';
+  $('cal').style.display='block';
   $('rate').textContent='Starting...';
   setTimeout(()=>{if(phoneOn&&!gotMotion)$('rate').textContent='No motion data from this browser';},2500);
 };
