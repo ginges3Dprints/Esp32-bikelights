@@ -2,7 +2,7 @@
 
 Smart bike lights you can print and control from your phone. A **hub** holds the ESP32 and the battery, and a **front light** and **back light** (WS2812B LED strip) plug into it. Control colours, modes and indicators over Bluetooth, with no WiFi to join.
 
-**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE)
+**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE) COMING SOON!!
 
 > Not waterproof as printed, and not a certified bike light. Check your local rules for bike lighting.
 
