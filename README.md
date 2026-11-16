@@ -2,7 +2,7 @@
 
 Smart bike lights you can print and control from your phone. A **hub** holds the ESP32 and the battery, and a **front light** and **back light** (WS2812B LED strip) plug into it. Control colours, modes and indicators over Bluetooth, with no WiFi to join.
 
-**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE) COMING SOON!!
+**3D model (customizable, print it here):** [MakerWorld page](PASTE-MAKERWORLD-LINK-HERE)
 
 > Not waterproof as printed, and not a certified bike light. Check your local rules for bike lighting.
 
@@ -44,7 +44,7 @@ Optional: an MPU6050 sensor (SDA to GPIO 21, SCL to GPIO 22, 3.3V, GND) can dete
 1. Install the Arduino IDE and add ESP32 board support.
 2. Install the **FastLED** library (Library Manager).
 3. Open `bike_lights_ble.ino`.
-4. Near the top, check `FRONT_LEDS` and `BACK_LEDS` match your lights, and change `OTA_PASS` (the password for wireless updates). You do **not** put your WiFi in the code. You type it into the phone dashboard.
+4. You do not need to edit the code. The LED counts, power limit, WiFi, Bluetooth name and update password are all set from the phone dashboard (see **Settings** below). The code only holds first-time defaults (6 LEDs per light, 1500 mA, update password `bike1234`).
 5. Board: **ESP32 Dev Module**. Partition Scheme: **Minimal SPIFFS (1.9MB APP with OTA)**.
 6. Upload.
 
@@ -73,9 +73,26 @@ iPhone alternative: the free **Bluefruit Connect** app (Controller screen) gives
   - Use the **Sensitivity** slider if it comes on too easily or not at all.
   - If it says left when you turn right, tap **Left/right swapped**.
   - **Show last turn details** displays the peak turn rate of your last turn, which helps with tuning.
+- **Settings:** see below.
 - **Update firmware:** see below.
 - **Presets:** Commuter, Be seen, Party, Chill.
 - **Battery percentage** shows at the top (or "USB power" if there is no battery).
+
+## Settings (saved on the lights)
+
+The **Settings** card changes things that used to be in the code. They are saved on the ESP32 and **stay when you update the code**, with a cable or wirelessly.
+
+- **Front / Back light: number of LEDs** (1 to 60).
+- **Power limit** in mA. Keep it below what your 5V boost converter can supply. Lower it if the ESP32 restarts when the lights are bright.
+- **Fix the battery reading:** measure the battery with a multimeter, type the voltage in, and tap the button. The percentage then matches.
+- **Wired turn sensor direction** (only shows if you fitted the optional sensor).
+- **Bluetooth name** (tap **Restart the lights** afterwards, then connect again).
+- **Wireless update password.**
+- **Restart the lights.**
+
+Also saved: colours, modes, brightness, indicator layout, auto indicator settings and your WiFi.
+
+Your settings are only lost if you choose "Erase all flash" in the Arduino IDE, or change the partition scheme when uploading with the cable. Pin numbers (GPIO 16, 17, 34) can only be changed in the code.
 
 ## Update the code without a cable
 
@@ -83,7 +100,7 @@ iPhone alternative: the free **Bluefruit Connect** app (Controller screen) gives
 2. Park the bike and tap **Start update mode**. The ESP32 joins your home WiFi for up to 10 minutes.
 3. In the Arduino IDE, choose the network port **bikelights** and upload as normal. Or open the web address shown on the dashboard on a computer on the same WiFi and upload a file made with Sketch, then Export Compiled Binary.
 
-The password is `OTA_PASS` from the code.
+The password is the **Wireless update password** from Settings (`bike1234` until you change it).
 
 ## Troubleshooting
 
@@ -91,9 +108,9 @@ The password is `OTA_PASS` from the code.
 - **BikeLights does not show up:** check the ESP32 has power, Bluetooth is on, and you are using Bluefy (iPhone) or Chrome (Android).
 - **The dashboard looks old:** close it completely and open it again.
 - **Left and right are on the wrong sides:** use **Indicator layout**.
-- **Battery percentage looks wrong:** change `BATT_CAL` in the code a little (for example 1.02).
+- **Battery percentage looks wrong:** use **Fix the battery reading** in Settings.
 - **Update mode cannot join WiFi:** save the WiFi name and password again in the dashboard. It must be a 2.4 GHz network. **Forget saved WiFi** clears it.
-- **ESP32 restarts when the lights are bright:** lower `MAX_MILLIAMPS` in the code.
+- **ESP32 restarts when the lights are bright:** lower the **Power limit** in Settings.
 
 ## Safety and disclaimer
 

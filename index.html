@@ -36,7 +36,9 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #ctl{display:none}
 #batt{font-size:15px;font-weight:700}
 #updmsg{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.4}
-#updbtn,#wsave,#wclear{width:100%;margin-top:8px}
+#updbtn,#wsave,#wclear,#bcal,#stf,#sdnb,#sopb,#srs{width:100%;margin-top:8px}
+#settings input:not([type=range]){width:100%;margin-top:6px;padding:12px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:16px;font-family:inherit}
+.hint,#setmsg{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.4}
 #upd input{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:16px;font-family:inherit}
 #wsaved{font-size:13px;color:var(--muted)}
 #imumsg,#rate,#peak{margin-top:6px;font-size:13px;color:var(--muted)}
@@ -88,6 +90,29 @@ label{display:block;margin:8px 0 0;font-size:14px}
     <div id="imumsg"></div>
   </div>
 
+  <div class="card" id="settings"><h2>Settings</h2>
+    <div class="hint">Saved on the lights. They stay when you update the code.</div>
+    <label>Front light: number of LEDs</label>
+    <input id="sfl" type="number" min="1" max="60" inputmode="numeric">
+    <label>Back light: number of LEDs</label>
+    <input id="sbl" type="number" min="1" max="60" inputmode="numeric">
+    <label id="mal">Power limit: 1500 mA</label>
+    <input type="range" id="sma" min="300" max="3000" step="100">
+    <div class="hint">Keep this below what your 5V boost converter can supply. Lower it if the ESP32 restarts when the lights are bright.</div>
+    <label>Battery percentage looks wrong?</label>
+    <input id="smeas" type="number" step="0.01" inputmode="decimal" placeholder="Battery volts from a multimeter, e.g. 3.95">
+    <button id="bcal">Fix the battery reading</button>
+    <button id="stf">Wired turn sensor direction: normal</button>
+    <label>Bluetooth name</label>
+    <input id="sdn" maxlength="20" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button id="sdnb">Save name</button>
+    <label>Wireless update password</label>
+    <input id="sop" type="password" placeholder="New password (4 or more characters)" autocomplete="off" autocapitalize="off">
+    <button id="sopb">Save update password</button>
+    <button id="srs">Restart the lights</button>
+    <div id="setmsg"></div>
+  </div>
+
   <div class="card" id="upd"><h2>Update firmware</h2>
     <div id="wsaved"></div>
     <input id="wssid" placeholder="Home WiFi name" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -127,6 +152,13 @@ function paint(){
     bt.style.color=S.bp>50?'var(--ok)':S.bp>20?'#e0a000':'var(--err)';
   }else if(S.bp===-1){bt.textContent='USB power';bt.style.color='var(--muted)';}
   else bt.textContent='';
+  $('settings').style.display=('fl' in S)?'block':'none';
+  if('fl' in S){
+    setVal('sfl',S.fl);setVal('sbl',S.bl);setVal('sdn',S.dn);
+    if(performance.now()>smaHold){setVal('sma',S.ma);$('mal').textContent='Power limit: '+S.ma+' mA';}
+    $('stf').style.display=(S.i===1)?'block':'none';
+    $('stf').textContent='Wired turn sensor direction: '+(S.tf?'swapped':'normal');
+  }
   $('upd').style.display=('u' in S)?'block':'none';
   if('u' in S){
     $('wsaved').textContent=S.wn?'Saved WiFi: '+S.wn:'No WiFi saved yet';
@@ -208,7 +240,7 @@ setInterval(async()=>{
   try{
     const v=await gatt(()=>st.readValue());
     const j=JSON.parse(dec.decode(v));
-    Object.assign(S,{p:j.p,g:j.g,bp:j.bp,bv:j.bv,u:j.u,ip:j.ip,wn:j.wn});paint();
+    const keepL=S.l,keepW=S.w;Object.assign(S,j);S.l=keepL;if(keepW)S.w=keepW;paint();
   }catch(e){}
 },4000);
 $('conn').onclick=async()=>{
@@ -367,6 +399,45 @@ $('phone').onclick=async()=>{
 };
 $('flip').onclick=()=>{pFlip=!pFlip;try{localStorage.setItem('flip',pFlip?'1':'0');}catch(e){}showFlip();};
 showFlip();
+// ----- settings saved on the lights -----
+let smaHold=0;
+function setVal(id,v){const el=$(id);if(document.activeElement!==el)el.value=v;}
+const clampInt=(v,a,b)=>Math.max(a,Math.min(b,Math.round(+v||a)));
+$('sfl').onchange=()=>{if(S&&('fl' in S))action('fl='+clampInt($('sfl').value,1,S.ml||60));};
+$('sbl').onchange=()=>{if(S&&('fl' in S))action('bl='+clampInt($('sbl').value,1,S.ml||60));};
+$('sma').oninput=e=>{smaHold=performance.now()+3000;$('mal').textContent='Power limit: '+e.target.value+' mA';};
+$('sma').onchange=e=>{if(S&&('fl' in S))action('ma='+e.target.value);};
+$('bcal').onclick=()=>{
+  const m=parseFloat($('smeas').value);
+  if(!S||!(S.bv>0)||!(m>2.5&&m<4.5)){$('setmsg').textContent='Type the battery voltage from your multimeter (for example 3.95). The lights must be running from the battery.';return;}
+  const nb=Math.max(700,Math.min(1300,Math.round(S.bc*m/S.bv)));   // so the reading matches the multimeter
+  action('bc='+nb);$('smeas').value='';
+  $('setmsg').textContent='Battery reading fixed. Give it a few seconds to settle.';
+};
+$('stf').onclick=()=>{if(S&&('fl' in S))action('tf='+(S.tf?0:1));};
+async function saveText(letter,text,commit){
+  const a=pieces(text);
+  for(let i=0;i<a.length;i++)await write(letter+(i?'1=':'0=')+a[i]);
+  await write(commit+'=1');await sleep(250);await readState();
+}
+$('sdnb').onclick=async()=>{
+  const t=$('sdn').value.trim();
+  if(!t||!rx||!S)return;
+  try{await saveText('d',t,'dsave');$('setmsg').textContent='Name saved. Tap Restart the lights, then connect again.';}
+  catch(e){$('setmsg').textContent='Could not save - check the Bluetooth connection.';}
+};
+$('sopb').onclick=async()=>{
+  const t=$('sop').value;
+  if(!rx||!S)return;
+  if(t.length<4){$('setmsg').textContent='Use at least 4 characters for the password.';return;}
+  try{await saveText('o',t,'osave');$('sop').value='';$('setmsg').textContent='Update password saved.';}
+  catch(e){$('setmsg').textContent='Could not save - check the Bluetooth connection.';}
+};
+$('srs').onclick=async()=>{
+  if(!rx)return;
+  try{await write('rs=1');$('setmsg').textContent='Restarting... the page will reconnect by itself.';}catch(e){}
+};
+
 // WiFi name / password are sent in small pieces so every message is short
 function pieces(s){
   const out=[];let cur='',len=0;
