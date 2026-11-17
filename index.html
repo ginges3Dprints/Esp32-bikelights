@@ -42,7 +42,12 @@ label{display:block;margin:8px 0 0;font-size:14px}
 #upd input{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:16px;font-family:inherit}
 #wsaved{font-size:13px;color:var(--muted)}
 #imumsg,#rate,#peak{margin-top:6px;font-size:13px;color:var(--muted)}
-#auto,#phone,#flip,#swf,#swb,#peakbtn,#cal{width:100%;margin-top:8px}
+#auto,#phone,#flip,#swf,#swb,#peakbtn,#cal,#tuneuse,#tunereset,#report{width:100%;margin-top:8px}
+#peak{white-space:pre-line}
+#tuning summary{margin-top:10px;padding:10px;border-radius:10px;background:var(--btn);font-size:15px}
+#tuning label{margin-top:12px}
+#reportbox{width:100%;margin-top:8px;padding:8px;border:0;border-radius:10px;background:var(--btn);color:var(--fg);font-size:13px;font-family:monospace}
+#reportmsg{margin-top:6px;font-size:13px;color:var(--muted)}
 #laymsg{margin-top:6px;font-size:13px;color:var(--muted)}
 </style>
 </head>
@@ -85,9 +90,18 @@ label{display:block;margin:8px 0 0;font-size:14px}
     <div id="peak"></div>
     <label>Sensitivity</label><input type="range" id="sens" min="1" max="100">
     <button id="flip">Left/right swapped: NO</button>
-    <button id="peakbtn">Show last turn details: OFF</button>
+    <button id="peakbtn">Show last turns: OFF</button>
     <button id="auto">Wired turn sensor: OFF</button>
     <div id="imumsg"></div>
+    <details id="tuning"><summary>Indicator tuning (advanced)</summary>
+      <div class="hint">These are saved on this phone and stay when the dashboard is updated. Use the Sensitivity slider above for the main trigger point (it goes down to 5 degrees).</div>
+      <div id="tunerows"></div>
+      <button id="tuneuse">Use calibration: ON</button>
+      <button id="tunereset">Reset tuning to the defaults</button>
+      <button id="report">Copy a report to send to Claude</button>
+      <textarea id="reportbox" rows="9" readonly style="display:none"></textarea>
+      <div id="reportmsg"></div>
+    </details>
   </div>
 
   <div class="card" id="settings"><h2>Settings</h2>
@@ -261,51 +275,98 @@ $('bri').oninput=e=>send({b:+e.target.value});
 $('spd').oninput=e=>send({s:+e.target.value});
 // ----- turn detection with the phone's motion sensors -----
 const IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-let phoneOn=false,pFlip=false,yaw=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false,lastT=0,theta=0,refractUntil=0;
+let phoneOn=false,pFlip=false,yaw=0,calmSince=0,phoneSig=0,pStart=0,pSent=0,lastShow=0,gotMotion=false,lastT=0,theta=0,refractUntil=0,accF=null;
 let calState=0,calStart=0,calN=0,calAcc=[0,0,0],calGyr=[0,0,0],calUp=null,calBias=null;
-let win=[],winSum=0;
+let win=[],evN=0,evT=0,hz=0,wakeOk=false,maxYawSeen=0,maxWinSeen=0;
 try{pFlip=localStorage.getItem('flip')==='1';}catch(e){}
 function showFlip(){$('flip').textContent='Left/right swapped: '+(pFlip?'YES':'NO');$('flip').classList.toggle('on',pFlip);}
-async function wake(){try{if(navigator.wakeLock)await navigator.wakeLock.request('screen');}catch(e){}}
+async function wake(){wakeOk=false;try{if(navigator.wakeLock){await navigator.wakeLock.request('screen');wakeOk=true;}}catch(e){}}
 document.addEventListener('visibilitychange',()=>{if(phoneOn&&document.visibilityState==='visible')wake();});
 function setSig(m){
   phoneSig=m;pSent=performance.now();
   if(S){S.g=m;paint();}
   if(rx)write('sg='+m).catch(()=>{});
 }
-// angle turned (degrees) over the last 1.5 s is added up, so bumps and wobble cancel out
-function addWin(now,d){win.push([now,d]);winSum+=d;while(win.length&&now-win[0][0]>1500)winSum-=win.shift()[1];}
-function winAngle(now,ms){let s=0;for(let i=win.length-1;i>=0&&now-win[i][0]<=ms;i--)s+=win[i][1];return s;}
-function startAngle(){return 40-0.3*(+$('sens').value);}   // sensitivity 1 = 40 deg, 100 = 10 deg in 1.5 s
 
-// ----- "last turn" line -----
-let showPeak=false,tOn=false,tArm=0,tPeak=0,tPeakA=0,tDir=0,tStart=0,tAngle=0,tCalm=0,tTrig=false,lastTurn=null;
+// ----- tuning (saved on this phone, so it stays when the page is updated) -----
+// key, label, min, max, step, default, format, hint
+const TUNE_SPEC=[
+ ['winMs','Look-back window',500,3000,100,1500,v=>(v/1000).toFixed(1)+' s','How far back the turning is added up. Longer is steadier but slower to start.'],
+ ['stopMs','"Still turning?" window',300,2000,100,800,v=>(v/1000).toFixed(1)+' s','How far back it looks to decide if you are still turning.'],
+ ['calmMs','Straight again for',300,3000,100,700,v=>(v/1000).toFixed(1)+' s','How long you must be straight before the indicator can switch off.'],
+ ['minOnMs','Shortest time on',1000,10000,500,3000,v=>(v/1000).toFixed(1)+' s','The indicator never switches off sooner than this.'],
+ ['doneDeg','Turned enough to switch off',10,90,5,30,v=>v+' deg','After turning this far it can switch off once you are straight.'],
+ ['longCalmMs','Switch off anyway when steady for',1000,8000,500,3000,v=>(v/1000).toFixed(1)+' s','For gentle bends that never reach the angle above.'],
+ ['maxOnMs','Longest time on',5000,60000,1000,20000,v=>(v/1000).toFixed(0)+' s','Safety limit.'],
+ ['refractMs','Ignore turns after switching off',0,6000,100,2500,v=>(v/1000).toFixed(1)+' s','Stops the wobble when you straighten up from starting a new indicator.'],
+ ['calSecs','Calibration time',1,6,1,3,v=>v+' s','How long you hold the bike still.'],
+ ['calShake','Calibration: allowed shaking',1,10,1,4,v=>v,'Raise this if calibration keeps saying the phone moved.']
+];
+let TN={};
+function loadTune(){
+  let sv={};try{sv=JSON.parse(localStorage.getItem('tune')||'{}');}catch(e){}
+  TUNE_SPEC.forEach(s=>{TN[s[0]]=(typeof sv[s[0]]==='number')?sv[s[0]]:s[5];});
+  TN.useCal=sv.useCal!==false;
+}
+function saveTune(){try{localStorage.setItem('tune',JSON.stringify(TN));}catch(e){}}
+loadTune();
+function buildTune(){
+  const box=$('tunerows');box.innerHTML='';
+  TUNE_SPEC.forEach(s=>{
+    const row=document.createElement('div');
+    const lab=document.createElement('label');
+    const inp=document.createElement('input');inp.type='range';inp.min=s[2];inp.max=s[3];inp.step=s[4];inp.value=TN[s[0]];
+    const hint=document.createElement('div');hint.className='hint';hint.textContent=s[7];
+    const show=()=>{lab.textContent=s[1]+': '+s[6](TN[s[0]]);};
+    inp.oninput=()=>{TN[s[0]]=+inp.value;show();saveTune();};
+    show();row.append(lab,inp,hint);box.appendChild(row);
+  });
+  $('tuneuse').textContent='Use calibration: '+(TN.useCal?'ON':'OFF');
+  $('tuneuse').classList.toggle('on',TN.useCal);
+}
+$('tuneuse').onclick=()=>{
+  TN.useCal=!TN.useCal;saveTune();
+  win=[];accF=null;yaw=0;
+  if(TN.useCal){if(phoneOn)startCal();}else{calState=0;if(phoneOn)$('rate').textContent='Calibration is off: using live gravity.';}
+  buildTune();
+};
+$('tunereset').onclick=()=>{try{localStorage.removeItem('tune');}catch(e){}loadTune();buildTune();};
+buildTune();
+
+// angle turned (degrees) is added up over a short window, so bumps and wobble cancel out
+function addWin(now,d){win.push([now,d]);while(win.length&&now-win[0][0]>3500)win.shift();}
+function winAngle(now,ms){let s=0;for(let i=win.length-1;i>=0&&now-win[i][0]<=ms;i--)s+=win[i][1];return s;}
+function startAngle(){return 45-0.4*(+$('sens').value);}   // sensitivity 1 = 45 deg, 100 = 5 deg within the look-back window
+
+// ----- "last turns" lines -----
+let showPeak=false,tOn=false,tArm=0,tPeak=0,tPeakA=0,tDir=0,tStart=0,tAngle=0,tCalm=0,tTrig=false,turnLog=[];
 try{showPeak=localStorage.getItem('peak')==='1';}catch(e){}
+function turnLine(t){
+  return (t.dir===1?'left':'right')+', peak '+t.peak.toFixed(0)+' deg/s, '+t.secs.toFixed(1)+' s, '+t.deg.toFixed(0)+' deg turned - '
+    +(t.trig?'indicator came on':'did NOT come on (needed '+t.thr.toFixed(0)+' deg in '+(t.win/1000).toFixed(1)+' s, best was '+t.ang.toFixed(0)+')');
+}
 function showTurn(){
-  $('peakbtn').textContent='Show last turn details: '+(showPeak?'ON':'OFF');
+  $('peakbtn').textContent='Show last turns: '+(showPeak?'ON':'OFF');
   $('peakbtn').classList.toggle('on',showPeak);
   if(!showPeak){$('peak').textContent='';return;}
-  if(!lastTurn){$('peak').textContent='Last turn: none yet';return;}
-  const t=lastTurn;
-  $('peak').textContent='Last turn: '+(t.dir===1?'left':'right')+', peak '+t.peak.toFixed(0)+' deg/s, '
-    +t.secs.toFixed(1)+' s, '+t.deg.toFixed(0)+' deg turned - '
-    +(t.trig?'indicator came on':'indicator did not come on (needed '+t.thr.toFixed(0)+' deg in 1.5 s, best was '+t.ang.toFixed(0)+')');
+  $('peak').textContent=turnLog.length?'Last turns (newest first):\n'+turnLog.slice().reverse().map(turnLine).join('\n'):'Last turns: none yet';
 }
-function trackTurn(now,dt){
+function trackTurn(now,dt,wa){
   const ay=Math.abs(yaw);
   if(!tOn){
-    if(ay>6){if(!tArm)tArm=now;if(now-tArm>300){tOn=true;tStart=tArm;tPeak=ay;tPeakA=Math.abs(winSum);tDir=yaw>0?1:2;tAngle=0;tCalm=0;tTrig=false;}}
+    if(ay>6){if(!tArm)tArm=now;if(now-tArm>300){tOn=true;tStart=tArm;tPeak=ay;tPeakA=Math.abs(wa);tDir=yaw>0?1:2;tAngle=0;tCalm=0;tTrig=false;}}
     else tArm=0;
   }
   if(tOn){
     tAngle+=yaw*dt;
     if(ay>tPeak){tPeak=ay;tDir=yaw>0?1:2;}
-    tPeakA=Math.max(tPeakA,Math.abs(winSum));
+    tPeakA=Math.max(tPeakA,Math.abs(wa));
     if(phoneSig)tTrig=true;
     if(ay<4){
       if(!tCalm)tCalm=now;
       if(now-tCalm>1000){
-        lastTurn={peak:tPeak,dir:tDir,secs:(now-1000-tStart)/1000,deg:Math.abs(tAngle),trig:tTrig,thr:startAngle(),ang:tPeakA};
+        turnLog.push({peak:tPeak,dir:tDir,secs:(now-1000-tStart)/1000,deg:Math.abs(tAngle),trig:tTrig,thr:startAngle(),ang:tPeakA,win:TN.winMs});
+        if(turnLog.length>5)turnLog.shift();
         tOn=false;tArm=0;showTurn();
       }
     }else tCalm=0;
@@ -314,42 +375,64 @@ function trackTurn(now,dt){
 $('peakbtn').onclick=()=>{showPeak=!showPeak;try{localStorage.setItem('peak',showPeak?'1':'0');}catch(e){}showTurn();};
 showTurn();
 
-// ----- calibration: bike upright and still for 3 seconds -----
+// ----- report you can copy and send to Claude -----
+function buildReport(){
+  const L=[];
+  L.push('Bike lights indicator report');
+  L.push('phone: '+(IOS?'iPhone':'other')+' | '+navigator.userAgent.slice(0,90));
+  L.push('motion data: '+hz+' Hz | screen kept awake: '+(wakeOk?'yes':'no')+' | detection on: '+phoneOn);
+  L.push('calibration: '+(TN.useCal?(calState===2?'done, up='+(calUp?calUp.map(x=>x.toFixed(2)).join(','):'?')+' bias='+(calBias?calBias.map(x=>x.toFixed(2)).join(','):'?'):'NOT done (state '+calState+')'):'off (live gravity)'));
+  L.push('sensitivity '+$('sens').value+' -> start angle '+startAngle().toFixed(0)+' deg | left/right swapped: '+pFlip);
+  L.push('highest turn rate seen: '+maxYawSeen.toFixed(0)+' deg/s | most turning in the window: '+maxWinSeen.toFixed(0)+' deg');
+  L.push('tuning: '+JSON.stringify(TN));
+  L.push('last turns:');
+  if(!turnLog.length)L.push('  none seen');
+  turnLog.forEach(t=>L.push('  '+turnLine(t)));
+  return L.join('\n');
+}
+$('report').onclick=async()=>{
+  const txt=buildReport(),box=$('reportbox');
+  box.value=txt;box.style.display='block';
+  try{await navigator.clipboard.writeText(txt);$('reportmsg').textContent='Copied. Paste it into your chat with Claude.';}
+  catch(e){box.focus();box.select();$('reportmsg').textContent='Press and hold in the box, choose Select All, then Copy.';}
+};
+
+// ----- calibration: bike upright and still -----
 function startCal(){calState=1;calStart=0;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];if(phoneSig)setSig(0);}
 function calibrate(now,acc,r){
+  const gLim=3*TN.calShake,aLim=0.4*TN.calShake,need=TN.calSecs*1000;
   if(!calStart)calStart=now;
   const gm=Math.hypot(r.beta,r.gamma,r.alpha);
   const mean=calN?calAcc.map(v=>v/calN):acc;
   const dev=Math.hypot(acc[0]-mean[0],acc[1]-mean[1],acc[2]-mean[2]);
-  if(gm>10||dev>1.5){calStart=now;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];$('rate').textContent='Calibrating... the phone moved, keep the bike still';return;}
+  if(gm>gLim||dev>aLim){calStart=now;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];$('rate').textContent='Calibrating... the phone moved, keep the bike still (shake '+gm.toFixed(0)+' deg/s, limit '+gLim.toFixed(0)+')';return;}
   calN++;for(let k=0;k<3;k++)calAcc[k]+=acc[k];
   calGyr[0]+=r.beta;calGyr[1]+=r.gamma;calGyr[2]+=r.alpha;
-  $('rate').textContent='Calibrating... keep the bike upright and still ('+Math.ceil(Math.max(0,3-(now-calStart)/1000))+')';
-  if(now-calStart>=3000&&calN>50){
+  $('rate').textContent='Calibrating... keep the bike upright and still ('+Math.ceil(Math.max(0,need/1000-(now-calStart)/1000))+')';
+  if(now-calStart>=need&&calN>10*TN.calSecs){
     const m=calAcc.map(v=>v/calN),mag=Math.hypot(m[0],m[1],m[2]);
     if(mag<5){calStart=0;calN=0;calAcc=[0,0,0];calGyr=[0,0,0];$('rate').textContent='Calibration failed - could not feel gravity, trying again';return;}
     calUp=m.map(v=>(IOS?-1:1)*v/mag);
     calBias=[calGyr[0]/calN,calGyr[1]/calN,calGyr[2]/calN];
-    calState=2;win=[];winSum=0;yaw=0;lastT=0;refractUntil=now+1000;
+    calState=2;win=[];yaw=0;lastT=0;refractUntil=now+1000;maxYawSeen=0;maxWinSeen=0;
     $('rate').textContent='Calibrated. Ready.';
   }
 }
 
 // ----- decide when to switch the indicator on and off -----
-function detect(now,dt,w){
+function detect(now,dt,w,wa){
   const startA=startAngle(),stopA=startA*0.25;
   if(!phoneSig){
     if(S.g!==0||now<refractUntil)return;
-    if(Math.abs(winSum)>startA){pStart=now;calmSince=0;theta=0;setSig(winSum>0?1:2);}
+    if(Math.abs(wa)>startA){pStart=now;calmSince=0;theta=0;setSig(wa>0?1:2);}
   }else{
     const sgn=phoneSig===1?1:-1;
     theta+=sgn*w*dt;                                   // degrees turned the way we indicated
     if(now-pSent>12000)setSig(phoneSig);
-    if(sgn*winAngle(now,800)<stopA){if(!calmSince)calmSince=now;}else calmSince=0;
+    if(sgn*winAngle(now,TN.stopMs)<stopA){if(!calmSince)calmSince=now;}else calmSince=0;
     const calmFor=calmSince?now-calmSince:0,on=now-pStart;
-    // off when the turn is over (turned enough and steady again), or steady for a long time, or far too long
-    if((on>3000&&calmFor>700&&(theta>30||calmFor>3000))||on>20000){
-      refractUntil=now+2500;calmSince=0;setSig(0);   // ignore the straightening-up wobble for a moment
+    if((on>TN.minOnMs&&calmFor>TN.calmMs&&(theta>TN.doneDeg||calmFor>TN.longCalmMs))||on>TN.maxOnMs){
+      refractUntil=now+TN.refractMs;calmSince=0;setSig(0);
     }
   }
 }
@@ -359,24 +442,36 @@ function onMotion(e){
   if(!r||!a||r.alpha==null||a.x==null)return;
   gotMotion=true;
   const now=performance.now();
+  evN++;if(now-evT>1000){hz=Math.round(evN*1000/(now-evT));evN=0;evT=now;}
   const dt=lastT?Math.min((now-lastT)/1000,0.1):0.016;lastT=now;
-  if(calState===1){calibrate(now,[a.x,a.y,a.z],r);return;}
-  if(calState!==2)return;
-  // turn rate around the bike's upright direction (found during calibration), + = turning left
-  let w=(r.beta-calBias[0])*calUp[0]+(r.gamma-calBias[1])*calUp[1]+(r.alpha-calBias[2])*calUp[2];
+  const acc=[a.x,a.y,a.z];
+  let up,bias;
+  if(TN.useCal){
+    if(calState===1){calibrate(now,acc,r);return;}
+    if(calState!==2)return;
+    up=calUp;bias=calBias;
+  }else{
+    if(!accF)accF=acc.slice();else for(let k=0;k<3;k++)accF[k]+=0.03*(acc[k]-accF[k]);
+    const mag=Math.hypot(accF[0],accF[1],accF[2]);if(mag<1)return;
+    up=accF.map(v=>(IOS?-1:1)*v/mag);bias=[0,0,0];
+  }
+  // turn rate around the bike's upright direction, + = turning left
+  let w=(r.beta-bias[0])*up[0]+(r.gamma-bias[1])*up[1]+(r.alpha-bias[2])*up[2];
   if(pFlip)w=-w;
   yaw+=0.15*(w-yaw);
   addWin(now,w*dt);
+  const wa=winAngle(now,TN.winMs);
+  maxYawSeen=Math.max(maxYawSeen,Math.abs(yaw));maxWinSeen=Math.max(maxWinSeen,Math.abs(wa));
   if(now-lastShow>200){
     lastShow=now;
-    $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+') | last 1.5 s: '+winSum.toFixed(0)+' deg'
-      +(phoneSig?' | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
+    $('rate').textContent='Turn rate: '+yaw.toFixed(0)+' deg/s ('+(yaw>8?'left':yaw<-8?'right':'straight')+') | last '+(TN.winMs/1000).toFixed(1)+' s: '+wa.toFixed(0)+' deg (needs '+startAngle().toFixed(0)+') | sensor '+hz+' Hz'
+      +(wakeOk?'':' | SCREEN MAY SLEEP: set Auto-Lock to Never')+(phoneSig?' | indicator '+(phoneSig===1?'LEFT':'RIGHT'):'');
   }
-  trackTurn(now,dt);
+  trackTurn(now,dt,wa);
   if(!S||!rx)return;
-  detect(now,dt,w);
+  detect(now,dt,w,wa);
 }
-$('cal').onclick=()=>{if(phoneOn)startCal();};
+$('cal').onclick=()=>{if(phoneOn&&TN.useCal)startCal();};
 $('phone').onclick=async()=>{
   if(phoneOn){
     phoneOn=false;window.removeEventListener('devicemotion',onMotion);
@@ -390,7 +485,8 @@ $('phone').onclick=async()=>{
       if(res!=='granted'){$('rate').textContent='Motion access was not allowed';return;}
     }
   }catch(e){$('rate').textContent='Could not get motion access: '+e.message;return;}
-  phoneOn=true;gotMotion=false;startCal();
+  phoneOn=true;gotMotion=false;accF=null;win=[];evN=0;evT=performance.now();maxYawSeen=0;maxWinSeen=0;
+  if(TN.useCal)startCal();
   window.addEventListener('devicemotion',onMotion);wake();
   $('phone').classList.add('on');$('phone').textContent='Detect turns with this phone: ON';
   $('cal').style.display='block';

@@ -69,10 +69,13 @@ iPhone alternative: the free **Bluefruit Connect** app (Controller screen) gives
 - **Auto indicators** (experimental): your phone's motion sensors turn the indicator on when the bike turns and off when you are straight again.
   - Tap **Detect turns with this phone** and allow motion access.
   - It then **calibrates**: keep the bike upright and still for 3 seconds. Tap **Recalibrate** whenever the phone moves in its holder.
-  - Keep the dashboard open with the screen on.
-  - Use the **Sensitivity** slider if it comes on too easily or not at all.
+  - Keep the dashboard open **with the screen on**. On iPhone set Settings, then Display & Brightness, then Auto-Lock to **Never** while riding.
+  - A live line shows the turn rate, how much you have turned in the look-back window and how much is needed, and the sensor rate. If the sensor rate is 0, the phone has paused the sensors.
+  - Use the **Sensitivity** slider if it comes on too easily or not at all. It goes down to 5 degrees. Very high sensitivity can trigger on bumps.
   - If it says left when you turn right, tap **Left/right swapped**.
-  - **Show last turn details** displays the peak turn rate of your last turn, which helps with tuning.
+  - **Show last turns** lists your last 5 turns: peak turn rate, how far you turned, what angle was needed, and whether the indicator came on.
+  - **Indicator tuning (advanced)** has sliders for the look-back window, how long it stays on, how straight you must be before it switches off, the calibration time and more. They are saved on your phone and stay when you update the dashboard. **Reset tuning** puts them back to the defaults, and **Use calibration** can be turned off to use live gravity instead.
+  - **Copy a report** copies your settings, the last turns, the highest turn rate seen and the sensor status, so you can paste it into a chat or an issue when asking for help.
 - **Settings:** see below.
 - **Update firmware:** see below.
 - **Presets:** Commuter, Be seen, Party, Chill.
